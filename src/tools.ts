@@ -5,7 +5,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { Resend } from "resend";
-
+import { env } from "cloudflare:workers";
 import { agentContext } from "./server";
 import { MemoryStore } from "./memory";
 import { EmailTemplate } from "./emails/email-template";
@@ -13,6 +13,7 @@ import {
   unstable_getSchedulePrompt,
   unstable_scheduleSchema,
 } from "agents/schedule";
+import weaviate, { ApiKey } from "weaviate-ts-client";
 
 /**
  * Weather information tool that requires human confirmation
@@ -39,7 +40,105 @@ const getLocalTime = tool({
   },
 });
 
+const getMarsWeather = tool({
+  description: "returns recent mars weather from the nasa insight project",
+  parameters: z.object({ nonsense: z.string() }),
+  execute: async () => {
+    const insightData = await (
+      await fetch(
+        `https://api.nasa.gov/insight_weather/?api_key=${env.NASA_API_KEY}&feedtype=json&ver=1.0`
+      )
+    ).json();
+    return insightData;
+  },
+});
 
+const getCurrentDate = tool({
+  description: "get current date",
+  parameters: z.object({
+    nonsense: z.string(),
+  }),
+  execute: async () => {
+    return new Date().toUTCString();
+  },
+});
+
+const getAsteroidsPassingBy = tool({
+  description: "returns nearby asteroids. returns array of asteroid ids",
+  parameters: z.object({
+    startDate: z.string({ description: "YYYY-MM-DD" }),
+    endDate: z
+      .string({ description: "YYYY-MM-DD, default is 7 days" })
+      .optional(),
+  }),
+  execute: async ({ startDate, endDate }) => {
+    const asteroids = await (
+      await fetch(
+        `https://api.nasa.gov/neo/rest/v1/feed?start_date=${startDate}&end_date=${endDate}&api_key=${env.NASA_API_KEY}`
+      )
+    ).json();
+    let firstKey;
+    try {
+      firstKey = Object.keys(asteroids.near_earth_objects)[0];
+    } catch (e) {
+      return "Errored Response: " + e.toString();
+    }
+    return asteroids.near_earth_objects[firstKey][0].id;
+  },
+});
+
+function findClosestApproachDate(
+  targetDate: string,
+  asteroids: { close_approach_date: string }[]
+) {
+  const target = new Date(targetDate).getTime();
+
+  let closestObject = null;
+  let minDifference = Number.POSITIVE_INFINITY;
+
+  for (const asteroid of asteroids) {
+    // Parse the close_approach_date string to a Date object.
+    const date = new Date(asteroid.close_approach_date).getTime();
+
+    if (!Number.isNaN(date)) {
+      // Ensure the date is valid
+      const difference = Math.abs(target - date);
+
+      if (difference < minDifference) {
+        minDifference = difference;
+        closestObject = asteroid;
+      }
+    }
+  }
+
+  return closestObject;
+}
+
+const getSingleAsteroid = tool({
+  description: "gets info about a given asteroid",
+  parameters: z.object({
+    asteroidId: z.string(),
+    targetDate: z.string({ description: "Example: Aug 5, 1990" }),
+  }),
+  execute: async ({ asteroidId, targetDate }) => {
+    const asteroid = await (
+      await fetch(
+        `https://api.nasa.gov/neo/rest/v1/neo/${asteroidId}?api_key=${env.NASA_API_KEY}`
+      )
+    ).json();
+    // const closest = asteroid.close_approach_data.sort((a, b) => new Date(a.close_approach_date).getTime() - new Date(b.close_approach_date).getTime())
+    const nearestPass = findClosestApproachDate(
+      targetDate,
+      asteroid.close_approach_data
+    );
+    return {
+      name: asteroid.designation,
+      url: asteroid.nasa_jpl_url,
+      diameter: asteroid.estimated_diameter.feet.estimated_diameter_max,
+      nearestPass,
+    };
+  },
+});
 
 const scheduleTask = tool({
   description: "A tool to schedule a task to be executed at a later time",
@@ -305,7 +404,7 @@ export const mcpServerTool = tool({
 const getNumberFact = tool({
   description: "Get an interesting fact about a specific number",
   parameters: z.object({
-    number: z.number().describe("The number to get a fact about")
+    number: z.number().describe("The number to get a fact about"),
   }),
   execute: async ({ number }) => {
     try {
@@ -323,6 +422,10 @@ const getNumberFact = tool({
 });
 
 export const tools = {
+  getMarsWeather,
+  getCurrentDate,
+  getAsteroidsPassingBy,
+  getSingleAsteroid,
   getWeatherInformation,
   getLocalTime,
   scheduleTask,

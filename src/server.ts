@@ -8,20 +8,21 @@ import {
   type StreamTextOnFinishCallback,
   type Message,
 } from "ai";
-import { openai } from "@ai-sdk/openai";
+// import { openai } from "@ai-sdk/openai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { processToolCalls } from "./utils";
 import { tools, executions } from "./tools";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Observed, fiberplane } from "@fiberplane/agents";
 import { MCPClientManager } from "agents/mcp/client";
-// import { env } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 
 // Environment variables type definition
-export type Env = {
-  OPENAI_API_KEY: string;
-  RESEND_API_KEY: string;
-  Chat: AgentNamespace<Chat>;
-};
+// export type Env = {
+//   OPENAI_API_KEY: string;
+//   RESEND_API_KEY: string;
+//   Chat: AgentNamespace<Chat>;
+// };
 
 // Memory state interface
 interface MemoryState {
@@ -35,12 +36,12 @@ interface MemoryState {
   >;
 }
 
-const model = openai("gpt-4o-2024-11-20");
 // Cloudflare AI Gateway
-// const openai = createOpenAI({
-//   apiKey: env.OPENAI_API_KEY,
-//   baseURL: env.GATEWAY_BASE_URL,
-// });
+const openai = createOpenAI({
+  apiKey: env.OPENAI_API_KEY,
+  baseURL: env.GATEWAY_BASE_URL,
+});
+const model = openai("gpt-4o-2024-11-20");
 
 // we use ALS to expose the agent context to the tools
 export const agentContext = new AsyncLocalStorage<Chat>();
@@ -171,7 +172,11 @@ Example: If a user says "Send an email to john@example.com about our meeting tom
  */
 const worker = {
   fetch: fiberplane(
-    async (request: Request, env: Env, ctx: ExecutionContext) => {
+    async (
+      request: Request,
+      env: Record<string, unknown>,
+      ctx: ExecutionContext
+    ) => {
       const url = new URL(request.url);
 
       if (url.pathname === "/check-open-ai-key") {
